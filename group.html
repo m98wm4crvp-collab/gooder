@@ -64,6 +64,12 @@ input[type=checkbox]{width:22px;height:22px;accent-color:var(--accent);padding:0
 .copy{width:100%;min-height:150px;font-size:14px;background:var(--sunk)}
 .muted{color:var(--muted);font-size:13px}
 .toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--paper);padding:9px 18px;border-radius:999px;font-size:14px;z-index:9}
+.done{margin-top:16px;background:var(--card);border:2px solid var(--ok);border-radius:8px;padding:16px 14px}
+.done .ok{font-family:var(--serif);font-weight:900;font-size:24px;color:var(--ok)}
+.done .who{font-weight:700;font-size:18px;margin:6px 0 4px}
+.done .ln{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line)}
+.done .tot{display:flex;justify-content:space-between;align-items:baseline;padding-top:10px}
+.done .tot b{font-family:var(--serif);font-size:26px;color:var(--accent)}
 .lead{background:#fff8e6;border:2px solid var(--mustard);border-radius:8px;padding:4px 14px 14px;margin-top:16px}
 </style>
 </head>
@@ -145,7 +151,7 @@ const GOODER_API="https://script.google.com/macros/s/AKfycbyH47yHfZCfoonsQLq2pUi
 const run=(fn,...a)=>fetch(GOODER_API,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({fn,args:a})})
   .then(r=>{if(!r.ok)throw new Error("NET");return r.json()}).then(o=>{if(!o.ok)throw new Error(o.err);return o.data});
 const MK="gooderMine_"+BOOT.token;
-let D=null,mine=[],form={id:null,editKey:"",name:"",q:{}},leadTab="link",confirmAct=null,busy=false;
+let D=null,mine=[],form={id:null,editKey:"",name:"",q:{}},leadTab="link",confirmAct=null,busy=false,sent=null,adding=false;
 try{mine=JSON.parse(localStorage.getItem(MK)||"[]")}catch(_){}
 const saveMine=()=>{try{localStorage.setItem(MK,JSON.stringify(mine))}catch(_){}};
 function toast(t){const e=$("toast");e.textContent=t;e.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(()=>e.hidden=true,2000)}
@@ -163,6 +169,8 @@ const itemsTxt=q=>D.products.filter(p=>(q||{})[p.id]>0).map(p=>sc(p)+(q[p.id])).
 const buyerUrl=()=>location.origin+location.pathname+"?g="+BOOT.token;
 const lineMsg=()=>`點連結下訂單：\n${buyerUrl()}`;
 const chainTpl=()=>`接龍格式（複製後改成自己的名字和數量）：\n名字 ${D.products.map(p=>sc(p)+"0").join(" ")}\n（${D.products.map(p=>`${sc(p)}＝${p.name}`).join("、")}）`;
+function dunMsg(){const{n}=totalQ(),un=D.entries.filter(e=>!e.paid);
+  return `【${D.group.title}】付款提醒\n還有 ${un.length} 位尚未付款：\n`+un.map(e=>`・${e.name}　${qn(e.q)} 顆 ${nt(amt(e.q,n))}`).join("\n")+`\n——\n未收合計 ${nt(un.reduce((a,e)=>a+amt(e.q,n),0))}${isGroupPrice(n)?"":`\n（目前以零售價計算，全團滿 ${D.groupMin} 顆會改用團購價）`}\n已經付款的請忽略，謝謝！`}
 function statement(){const{t,n}=totalQ();
   return `【${D.group.title}】對帳單（共 ${n} 顆，${isGroupPrice(n)?"團購價":"零售價"}）\n`+D.entries.map((e,i)=>`${i+1}. ${e.name}：${itemsTxt(e.q)}　${qn(e.q)} 顆 ${nt(amt(e.q,n))}${e.paid?"（已付）":""}`).join("\n")+
   `\n——\n${D.products.filter(p=>t[p.id]).map(p=>`${p.name} ${t[p.id]}`).join("、")}\n合計 ${nt(D.entries.reduce((a,e)=>a+amt(e.q,n),0))}`}
@@ -177,17 +185,28 @@ function render(){
   <div class="prog"><div style="display:flex;justify-content:space-between;align-items:baseline"><span>全團目前</span><span><b>${n}</b> / ${D.groupMin} 顆</span></div>
    <div class="bar"><i style="width:${pct}%"></i></div><div style="font-size:14px">${isGroupPrice(n)?"已達標！全團每顆都用團購價":`再 ${need} 顆，全團每顆都用團購價`}</div></div>`;
   if(D.isLeader)h+=leaderHTML(t,n);
-  if(open){
+  const sentE=sent&&myEntries.find(e=>e.id===sent);
+  const showForm=open&&!sentE&&(f.id||adding||!myEntries.length);
+  if(sentE){const sa=amt(sentE.q,n);
+    h+=`<div class="done"><div class="ok">✓ 訂單已送出</div><div class="who">${esc(sentE.name)}</div>
+      ${D.products.filter(p=>(sentE.q||{})[p.id]>0).map(p=>`<div class="ln"><span>${esc(p.name)} × ${sentE.q[p.id]}</span><span>${nt(sentE.q[p.id]*unit(p,n))}</span></div>`).join("")}
+      <div class="tot"><span>共 ${qn(sentE.q)} 顆・${isGroupPrice(n)?"團購價":"目前零售價"}</span><b>${nt(sa)}</b></div>
+      ${isGroupPrice(n)?"":`<div class="muted" style="margin-top:6px">全團滿 ${D.groupMin} 顆後會自動改用團購價，金額以團主結單時為準。</div>`}
+      <div class="muted" style="margin-top:6px">可以截圖這個畫面傳給團主，方便對帳。付款方式請看團主的說明。</div>
+      <div style="height:12px"></div>${open?`<div class="row"><button class="btn" style="flex:1" type="button" data-act="edit" data-id="${sentE.id}">修改這筆</button><button class="btn" style="flex:1" type="button" data-act="another">再幫一位登記</button></div><div style="height:8px"></div>`:""}
+      <button class="btn primary block" type="button" data-act="sentok">好，知道了</button></div>`;
+  }
+  if(showForm){
     h+=`<h2>${f.id?"修改我的訂單":"我要訂"}</h2><div class="box">${D.products.map(p=>`<div class="prod"><div class="i"><div class="n">${esc(p.name)}</div>${tg(p)?`<div class="t">${esc(tg(p))}</div>`:""}<div class="p">零售 $${p.retail}・團購 $${p.group}</div></div>
       <div class="qty"><button type="button" data-q="${p.id}" data-d="-1" aria-label="${esc(p.name)}減一">−</button><output>${f.q[p.id]||0}</output><button type="button" data-q="${p.id}" data-d="1" aria-label="${esc(p.name)}加一">+</button></div></div>`).join("")}</div>
      <div style="height:10px"></div><label>你的名字（團主認得的稱呼）<input id="fname" value="${esc(f.name)}" autocomplete="off"></label>
      <div class="sum"><span>${fn} 顆・${isGroupPrice(projected)?"團購價":"目前零售價"}</span><b>${nt(D.products.reduce((a,p)=>a+(f.q[p.id]||0)*unit(p,projected),0))}</b></div>
      ${!isGroupPrice(projected)&&fn?`<div class="muted" style="margin-top:6px">${esc(D.shipNote)}全團滿 ${D.groupMin} 顆後，會自動改用團購價，金額以團主結單時為準。</div>`:""}
-     <div style="height:10px"></div><div class="row"><button class="btn accent" style="flex:1" type="button" data-act="submit" ${busy?"disabled":""}>${f.id?"儲存修改":"送出訂單"}</button>${f.id?`<button class="btn ghost" type="button" data-act="cancelEdit">取消</button>`:""}</div>`;
+     <div style="height:10px"></div><div class="row"><button class="btn accent" style="flex:1" type="button" data-act="submit" ${busy?"disabled":""}>${f.id?"儲存修改":"送出訂單"}</button>${f.id||(adding&&myEntries.length)?`<button class="btn ghost" type="button" data-act="cancelEdit">取消</button>`:""}</div>`;
   }
-  if(myEntries.length){h+=`<h2>我的訂單</h2><p class="muted" style="margin:-4px 0 10px">${open?"送出後可以在這裡修改或取消，結單前都有效。":"已結單，不能再修改。"}如果無法更改（例如換了手機），請直接找團主。</p>`+myEntries.map(e=>`<div class="mine"><div><b>${esc(e.name)}</b><div class="muted">${esc(itemsTxt(e.q))}・${qn(e.q)} 顆・${nt(amt(e.q,n))}</div></div>
+  if(myEntries.length){h+=`<h2>我的訂單</h2><p class="muted" style="margin:-4px 0 10px">${open?(showForm||sentE?"":"這支手機已經登記過了。要改數量請按「修改」，不用重新填一張。")+"結單前都可以修改或取消。":"已結單，不能再修改。"}如果無法更改（例如換了手機），請直接找團主。</p>`+myEntries.map(e=>`<div class="mine"><div><b>${esc(e.name)}</b><div class="muted">${esc(itemsTxt(e.q))}・${qn(e.q)} 顆・${nt(amt(e.q,n))}</div></div>
     ${open?`<div class="row"><button class="btn sm" type="button" data-act="edit" data-id="${e.id}">修改</button>${confirmAct==="del:"+e.id?`<button class="btn sm accent" type="button" data-act="delyes" data-id="${e.id}">確定刪除</button>`:`<button class="btn sm ghost" type="button" data-act="del" data-id="${e.id}">刪除</button>`}</div>`:""}</div>`).join("");
-    if(open&&!f.id)h+=`<button class="btn block ghost" type="button" data-act="another">再幫一位家人／朋友登記</button>`}
+    if(open&&!showForm&&!sentE)h+=`<button class="btn block ghost" type="button" data-act="another">再幫一位家人／朋友登記</button>`}
   if(!D.isLeader)h+=`<p class="muted" style="margin-top:16px;text-align:center">目前 ${D.entries.length} 人登記・共 ${n} 顆</p>`;
   $("main").innerHTML=h;
 }
@@ -204,7 +223,8 @@ function leaderHTML(t,n){
     <td><input type="checkbox" data-paid="${e.id}" ${e.paid?"checked":""} aria-label="${esc(e.name)} 已付款"></td>${open?`<td>${confirmAct==="ldel:"+e.id?`<button class="btn sm accent" type="button" data-act="ldelyes" data-id="${e.id}">刪</button>`:`<button class="btn sm ghost" type="button" data-act="ldel" data-id="${e.id}" aria-label="刪除 ${esc(e.name)}">✕</button>`}</td>`:""}</tr>`).join("")}</tbody>
    <tfoot><tr><td>合計</td>${D.products.map(p=>`<td>${t[p.id]||0}</td>`).join("")}<td>${n}</td><td>${nt(all)}</td><td colspan="${open?2:1}"></td></tr></tfoot></table></div>
    <div class="sum"><span>已收 ${nt(paidAmt)}</span><span>未收 <b>${nt(all-paidAmt)}</b></span></div>
-   <div style="height:8px"></div><button class="btn block" type="button" data-act="copyStmt">複製對帳單（收錢、對數量用）</button>`:`<p class="muted">還沒有人登記。</p>`);
+   <div style="height:8px"></div>${D.entries.some(e=>!e.paid)?`<button class="btn accent block" type="button" data-act="copyDun">複製催款訊息（還有 ${D.entries.filter(e=>!e.paid).length} 位未付）</button><div style="height:8px"></div>`:`<div class="notice" style="margin:0 0 8px;color:var(--ok);font-weight:700">全部都付款了 ✓</div>`}
+   <button class="btn block" type="button" data-act="copyStmt">複製對帳單（收錢、對數量用）</button>`:`<p class="muted">還沒有人登記。</p>`);
   if(open)h+=`<div style="height:14px"></div>${confirmAct==="close"?`<div class="notice"><b>確定結單？</b>結單後大家就不能再填或修改，訂單會送到店家。<div style="height:8px"></div><div class="row"><button class="btn accent" style="flex:1" type="button" data-act="closeyes">確定結單</button><button class="btn ghost" type="button" data-act="closeno">再等等</button></div></div>`
     :`<button class="btn accent block" type="button" data-act="close" ${D.entries.length?"":"disabled"}>結單，送出給店家</button>`}`;
   else h+=`<div class="notice" style="margin-top:12px">已結單並送到店家，店家會照這份名單出貨。</div>`;
@@ -220,15 +240,17 @@ document.addEventListener("click",async ev=>{
       busy=true;render();
       const r=JSON.parse(await run("pubSave",BOOT.token,BOOT.key,JSON.stringify({id:form.id,editKey:form.editKey,name:form.name,q:form.q})));
       if(!form.id)mine.push({id:r.id,editKey:r.editKey,name:form.name});else{const m=mine.find(x=>x.id===form.id);if(m)m.name=form.name}saveMine();
-      toast(form.id?"已更新":"已送出，謝謝！");form={id:null,editKey:"",name:"",q:{}};busy=false;await load();return}
-    if(a==="cancelEdit"){form={id:null,editKey:"",name:"",q:{}};render();return}
-    if(a==="another"){form={id:null,editKey:"",name:"",q:{}};render();window.scrollTo(0,0);return}
-    if(a==="edit"){const e=D.entries.find(x=>x.id===id),m=mine.find(x=>x.id===id);form={id,editKey:m?.editKey||"",name:e.name||m?.name||"",q:{...e.q}};render();window.scrollTo(0,0);return}
+      toast(form.id?"已更新":"已送出，謝謝！");sent=form.id||r.id;adding=false;form={id:null,editKey:"",name:"",q:{}};busy=false;await load();window.scrollTo(0,0);return}
+    if(a==="sentok"){sent=null;render();return}
+    if(a==="cancelEdit"){adding=false;form={id:null,editKey:"",name:"",q:{}};render();return}
+    if(a==="another"){sent=null;adding=true;form={id:null,editKey:"",name:"",q:{}};render();document.querySelector(".box")?.scrollIntoView({block:"center"});return}
+    if(a==="edit"){const e=D.entries.find(x=>x.id===id),m=mine.find(x=>x.id===id);sent=null;form={id,editKey:m?.editKey||"",name:e.name||m?.name||"",q:{...e.q}};render();document.querySelector(".box")?.scrollIntoView({block:"center"});return}
     if(a==="del"||a==="ldel"){confirmAct=(a==="del"?"del:":"ldel:")+id;render();return}
     if(a==="delyes"||a==="ldelyes"){const m=mine.find(x=>x.id===id);await run("pubDelete",BOOT.token,BOOT.key,id,m?.editKey||"");mine=mine.filter(x=>x.id!==id);saveMine();confirmAct=null;toast("已刪除");await load();return}
     if(a==="copyMsg")return copy(lineMsg());
     if(a==="copyChain")return copy(chainTpl());
     if(a==="copyStmt")return copy(statement());
+    if(a==="copyDun")return copy(dunMsg());
     if(a==="import"){const r=parseLineOrders($("chainIn").value,D.products);
       if(!r.members.length){$("impMsg").textContent="看不出口味和數量，請確認貼的是接龍內容。";return}
       const k=await run("pubImport",BOOT.token,BOOT.key,JSON.stringify(r.members.map(m=>({name:m.name,q:m.q}))));

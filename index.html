@@ -227,6 +227,11 @@ nav.tabs .add svg{width:30px;height:30px;color:var(--mustard)}
 .tbl th{background:var(--navy);color:var(--navy-ink);font-weight:700;font-size:12px}
 .tbl td:first-child,.tbl th:first-child{text-align:left}
 .tbl tfoot td{font-weight:700;background:var(--sunk)}
+.prep{display:grid;grid-template-columns:repeat(auto-fit,minmax(56px,1fr));gap:6px;margin-top:8px}
+.prep div{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:8px 4px;text-align:center}
+.prep b{display:block;font-family:var(--serif);font-size:28px;line-height:1.15;color:var(--accent)}
+.prep span{font-size:13px}
+.prep .all{background:var(--navy);border-color:var(--navy);color:var(--navy-ink)}.prep .all b{color:var(--mustard)}
 .tbl tbody td:first-child{position:sticky;left:0;z-index:1;background:var(--card);box-shadow:1px 0 0 var(--line)}
 .tbl thead th:first-child{position:sticky;left:0;z-index:2;background:var(--navy)}
 .tbl tfoot td:first-child{position:sticky;left:0;z-index:1;background:var(--sunk)}
@@ -468,6 +473,10 @@ function sheetList(o){
   const tot=(o.items||[]).map(i=>`${i.name} ${i.qty}`).join("、");
   return `【${o.customerName} 團購 分裝對照單】#${o.no||""}\n${o.members.map((m,k)=>`${k+1}. ${m.name}${m.phone?" "+m.phone:""}\n   ${(m.items||[]).map(i=>short(i.name)+" × "+i.qty).join("、")}　共 ${m.qty} 顆 ${nt(memAmt(o,m))}${m.address?"\n   寄：" +m.address:""}`).join("\n")}\n——\n合計：${tot}（共 ${o.qty} 顆）`;
 }
+function prepText(o){return `【備料單】${o.customerName} #${o.no||""}\n${(o.items||[]).map(i=>`${i.name} ${i.qty}`).join("\n")}\n——\n共 ${o.qty||0} 顆${o.paidAt?`\n預計出貨 ${shipWindow(o.paidAt)}`:""}`}
+function prepBlock(o){return `<h2 style="font-size:17px">備料單 <span class="muted" style="font-family:var(--sans);font-weight:400">這張單要做的數量</span></h2>
+  <div class="prep">${(o.items||[]).map(i=>`<div><b>${i.qty}</b><span>${esc(short(i.name))}</span></div>`).join("")}<div class="all"><b>${o.qty||0}</b><span>合計</span></div></div>
+  <div style="height:8px"></div><button class="btn block" type="button" data-act="copyprep">複製備料單</button>`}
 function memberTable(o){
   const flv=(o.items||[]).map(i=>({id:i.productId,name:i.name,qty:i.qty}));
   const packed=o.members.filter(m=>m.packed).length,paidN=o.members.filter(m=>m.paid).length;
@@ -504,6 +513,7 @@ function renderSheet(){
       <div class="muted"><span>冷凍宅配運費</span><span>${nt(o.shippingFee)}</span></div>
       <div style="font-family:var(--serif);font-size:20px"><span>應付總額</span><span>${nt(o.total)}</span></div>
     </div>
+    ${s!=="cancel"?prepBlock(o):""}
     ${o.members?.length?memberTable(o):""}
     <h2 style="font-size:17px">給客人的 LINE 訊息</h2>
     <textarea class="msg" id="msg" readonly>${esc(lineMsg(o))}</textarea>
@@ -531,6 +541,7 @@ $("sheet").addEventListener("click",async e=>{
   const a=b.dataset.act,s=st(o),now=new Date().toISOString();
   if(a==="close")return closeSheet();
   if(a==="copy"){const t=$("msg");try{await navigator.clipboard.writeText(t.value);toast("已複製，貼到 LINE 給客人")}catch(_){t.focus();t.select();toast("請長按選取後複製")}return}
+  if(a==="copyprep"){const t=prepText(o);try{await navigator.clipboard.writeText(t);toast("備料單已複製")}catch(_){const m=$("msg");m.value=t;m.focus();m.select();toast("請長按選取後複製")}return}
   if(a==="copylist"){const t=sheetList(o);try{await navigator.clipboard.writeText(t);toast("對照單已複製")}catch(_){const m=$("msg");m.value=t;m.focus();m.select();toast("請長按選取後複製")}return}
   if(a==="edit"){loadForEdit(o);return}
   if(a==="del"){S.confirm="del";return renderSheet()}
@@ -818,10 +829,12 @@ const gPill=g=>g.status==="open"?"st-paid":g.status==="cancel"?"st-cancel":"st-d
 function renderGroups(){
   const gs=[...S.groups].sort((a,b)=>(a.status==="open"?0:a.status==="closed"?1:2)-(b.status==="open"?0:b.status==="closed"?1:2)||String(b.createdAt||"").localeCompare(String(a.createdAt||"")));
   if(!window.gooderBase){$("groupList").innerHTML=`<div class="empty">開團功能需要在 Google 試算表版本使用。</div>`;return}
-  $("groupList").innerHTML=gs.length?gs.map(g=>{const es=gEntries(g),n=es.reduce((a,e)=>a+qsum(e.q),0);
+  $("groupList").innerHTML=gs.length?gs.map(g=>{const es=gEntries(g),n=es.reduce((a,e)=>a+qsum(e.q),0),paid=es.filter(e=>e.paid).length;
+    const ord=S.orders.find(o=>o.groupId===g.id||o.id===g.orderId),gp=n>=(Number(S.settings.groupMin)||50);
+    const money=ord?ord.subtotal:es.reduce((a,e)=>a+S.products.reduce((x,p)=>x+((e.q||{})[p.id]||0)*(gp?group(p):retail(p)),0),0);
     return `<button type="button" class="order" data-g="${g.id}"><div class="r1"><span class="nm">${esc(g.title||g.leader)}</span><span class="pill ${gPill(g)}">${gLabel(g)}</span></div>
       <div class="meta">團主 ${esc(g.leader)}${g.deadline?" · 收單至 "+esc(g.deadline):""}</div>
-      <div class="r2"><span class="items">${es.length} 人登記</span><span class="amt">${n} 顆</span></div></button>`}).join("")
+      <div class="r2"><span class="items">${es.length} 人登記${es.length&&g.status!=="cancel"?`・已付 ${paid}／${es.length}`:""}</span><span class="amt">${n} 顆${es.length?"・"+nt(money):""}</span></div></button>`}).join("")
     :`<div class="empty">還沒有開團。按上面「開新團」幫團主建立第一團。</div>`;
 }
 $("gNewToggle").addEventListener("click",()=>{$("gForm").hidden=!$("gForm").hidden;if(!$("gForm").hidden)$("gTitle").focus()});
