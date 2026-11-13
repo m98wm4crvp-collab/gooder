@@ -227,6 +227,9 @@ nav.tabs .add svg{width:30px;height:30px;color:var(--mustard)}
 .tbl th{background:var(--navy);color:var(--navy-ink);font-weight:700;font-size:12px}
 .tbl td:first-child,.tbl th:first-child{text-align:left}
 .tbl tfoot td{font-weight:700;background:var(--sunk)}
+.tbl tbody td:first-child{position:sticky;left:0;z-index:1;background:var(--card);box-shadow:1px 0 0 var(--line)}
+.tbl thead th:first-child{position:sticky;left:0;z-index:2;background:var(--navy)}
+.tbl tfoot td:first-child{position:sticky;left:0;z-index:1;background:var(--sunk)}
 .tbl tr.done td{color:var(--muted);text-decoration:line-through}
 .tbl input[type=checkbox]{width:22px;height:22px;accent-color:var(--accent)}
 </style>
@@ -467,13 +470,15 @@ function sheetList(o){
 }
 function memberTable(o){
   const flv=(o.items||[]).map(i=>({id:i.productId,name:i.name,qty:i.qty}));
-  const packed=o.members.filter(m=>m.packed).length;
-  return `<h2 style="font-size:17px">分裝對照單 <span class="muted" style="font-family:var(--sans);font-weight:400">已分裝 ${packed}／${o.members.length}</span></h2>
-  <div class="tbl"><table><thead><tr><th>訂購人</th>${flv.map(f=>`<th>${esc(short(f.name))}</th>`).join("")}<th>顆</th><th>金額</th><th>分裝</th></tr></thead>
+  const packed=o.members.filter(m=>m.packed).length,paidN=o.members.filter(m=>m.paid).length;
+  const paidAmt=o.members.filter(m=>m.paid).reduce((a,m)=>a+memAmt(o,m),0);
+  return `<h2 style="font-size:17px">分裝對照單 <span class="muted" style="font-family:var(--sans);font-weight:400">已付 ${paidN}／${o.members.length}・已分裝 ${packed}／${o.members.length}</span></h2>
+  <div class="muted" style="margin-top:-4px">已收 ${nt(paidAmt)}・未收 ${nt(o.subtotal-paidAmt)}</div>
+  <div class="tbl"><table><thead><tr><th>訂購人</th>${flv.map(f=>`<th>${esc(short(f.name))}</th>`).join("")}<th>顆</th><th>金額</th><th>已付</th><th>分裝</th></tr></thead>
   <tbody>${o.members.map((m,k)=>`<tr class="${m.packed?"done":""}"><td>${esc(m.name)}${m.address?`<div class="muted" style="text-decoration:none;white-space:normal;max-width:9em">${esc(m.address)}</div>`:""}</td>
     ${flv.map(f=>{const it=(m.items||[]).find(i=>i.productId===f.id);return `<td>${it?it.qty:"·"}</td>`}).join("")}
-    <td>${m.qty}</td><td>${nt(memAmt(o,m))}</td><td>${S.canWrite?`<input type="checkbox" data-pack="${k}" ${m.packed?"checked":""} aria-label="${esc(m.name)} 已分裝">`:(m.packed?"✓":"")}</td></tr>`).join("")}</tbody>
-  <tfoot><tr><td>合計</td>${flv.map(f=>`<td>${f.qty}</td>`).join("")}<td>${o.qty}</td><td>${nt(o.subtotal)}</td><td></td></tr></tfoot></table></div>
+    <td>${m.qty}</td><td>${nt(memAmt(o,m))}</td><td>${S.canWrite?`<input type="checkbox" data-mpaid="${k}" ${m.paid?"checked":""} aria-label="${esc(m.name)} 已付款">`:(m.paid?"✓":"")}</td><td>${S.canWrite?`<input type="checkbox" data-pack="${k}" ${m.packed?"checked":""} aria-label="${esc(m.name)} 已分裝">`:(m.packed?"✓":"")}</td></tr>`).join("")}</tbody>
+  <tfoot><tr><td>合計</td>${flv.map(f=>`<td>${f.qty}</td>`).join("")}<td>${o.qty}</td><td>${nt(o.subtotal)}</td><td></td><td></td></tr></tfoot></table></div>
   <div style="height:8px"></div><button class="btn block" type="button" data-act="copylist">複製對照單</button>`;
 }
 function openSheet(id){S.open=id;S.confirm=null;renderSheet();$("sheetBg").hidden=false}
@@ -543,6 +548,20 @@ $("sheet").addEventListener("click",async e=>{
   }catch(err){fail(err);b.disabled=false}
 });
 
+// 已付：訂單分裝表 ↔ 開團登記 兩邊同步
+async function setPaid(entryId,orderId,memberIdx,paid){
+  const now=new Date().toISOString(),jobs=[];
+  const o=orderId?S.orders.find(x=>x.id===orderId):entryId?S.orders.find(x=>(x.members||[]).some(m=>m.entryId===entryId)):null;
+  if(o){const members=o.members.map((m,i)=>(memberIdx!=null?i===memberIdx:m.entryId===entryId)?{...m,paid}:m);
+    if(memberIdx!=null&&!entryId)entryId=o.members[memberIdx]?.entryId;
+    jobs.push(S.db.collection("orders").doc(o.id).update({members,updatedAt:now}))}
+  if(entryId&&S.entries.some(x=>x.id===entryId))jobs.push(S.db.collection("entries").doc(entryId).update({paid}));
+  await Promise.all(jobs);
+}
+$("sheet").addEventListener("change",async e=>{const c=e.target.closest("[data-mpaid],[data-gpaid]");if(!c)return;
+  try{if(c.dataset.gpaid)await setPaid(c.dataset.gpaid,null,null,c.checked);else await setPaid(null,S.open,+c.dataset.mpaid,c.checked);
+    if(S.openG)renderGroupSheet()}
+  catch(err){c.checked=!c.checked;fail(err)}});
 $("sheet").addEventListener("change",async e=>{const c=e.target.closest("[data-pack]");if(!c)return;
   const o=S.orders.find(x=>x.id===S.open);if(!o)return;const k=+c.dataset.pack;
   const members=o.members.map((m,i)=>i===k?{...m,packed:c.checked}:m);
@@ -831,7 +850,7 @@ function renderGroupSheet(){
     <div style="height:8px"></div><div class="row-actions"><button class="btn primary" style="flex:1" type="button" data-gact="copyLeader">複製團主連結</button><button class="btn" type="button" data-gact="copyBuyer">只複製填單連結</button></div>
     <h2 style="font-size:17px">目前登記（${es.length} 人・${n} 顆）</h2>
     ${es.length?`<div class="tbl"><table><thead><tr><th>名字</th>${flv.map(p=>`<th>${esc(short(p.name))}</th>`).join("")}<th>顆</th><th>已付</th></tr></thead>
-      <tbody>${es.map(e=>`<tr><td>${esc(e.name)}</td>${flv.map(p=>`<td>${(e.q||{})[p.id]||"·"}</td>`).join("")}<td>${qsum(e.q)}</td><td>${e.paid?"✓":""}</td></tr>`).join("")}</tbody>
+      <tbody>${es.map(e=>`<tr><td>${esc(e.name)}</td>${flv.map(p=>`<td>${(e.q||{})[p.id]||"·"}</td>`).join("")}<td>${qsum(e.q)}</td><td>${S.canWrite?`<input type="checkbox" data-gpaid="${e.id}" ${e.paid?"checked":""} aria-label="${esc(e.name)} 已付款">`:(e.paid?"✓":"")}</td></tr>`).join("")}</tbody>
       <tfoot><tr><td>合計</td>${flv.map(p=>`<td>${tot[p.id]}</td>`).join("")}<td>${n}</td><td></td></tr></tfoot></table></div>`:`<p class="muted">還沒有人登記。</p>`}
     <div style="height:14px"></div>
     ${open?(S.confirm==="gclose"?`<div class="notice"><b>確定幫團主結單？</b>結單後就不能再登記，會建立一張團購訂單。<div style="height:8px"></div><div class="row-actions"><button class="btn accent" style="flex:1" type="button" data-gact="closeyes">確定結單</button><button class="btn ghost" type="button" data-gact="closeno">再等等</button></div></div>`
